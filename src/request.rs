@@ -38,6 +38,8 @@ impl<'a, B, E: Encode, D: Decode> RequestBuilder<'a, B, E, D> {
         })
     }
 
+    // TODO: timeout
+
     pub fn encoder<T: Encode<Item = E::Item>>(self, encoder: T) -> RequestBuilder<'a, B, T, D> {
         RequestBuilder {
             connection: self.connection,

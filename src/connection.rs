@@ -34,6 +34,8 @@ impl Future for Connect {
     }
 }
 
+// TODO: nodelay
+
 #[derive(Debug)]
 pub struct TcpStream(fibers::net::TcpStream);
 impl TcpStream {
