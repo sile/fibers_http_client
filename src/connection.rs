@@ -1,53 +1,56 @@
-use bytecodec::io::{ReadBuf, StreamState, WriteBuf};
-use fibers;
-use futures::{Future, Poll};
-use std::sync::Arc;
+use bytecodec::io::BufferedIo;
+use fibers::net::TcpStream;
+use futures::Future;
+use std::net::SocketAddr;
 
-use Error;
+use {BoxFuture, Error};
+
+pub trait ConnectionPool {
+    fn acqurie_connection(&mut self, addr: SocketAddr) -> BoxFuture<Connection>;
+    fn release_connection(&mut self, connection: Connection);
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct OneshotConnectionPool(());
+impl OneshotConnectionPool {
+    pub fn new() -> Self {
+        OneshotConnectionPool(())
+    }
+}
+impl ConnectionPool for OneshotConnectionPool {
+    fn acqurie_connection(&mut self, addr: SocketAddr) -> BoxFuture<Connection> {
+        let future = TcpStream::connect(addr)
+            .map_err(move |e| track!(Error::from(e); addr))
+            .map(move |stream| Connection::new(addr, stream));
+        Box::new(future)
+    }
+
+    fn release_connection(&mut self, _connection: Connection) {}
+}
 
 #[derive(Debug)]
-pub enum Connection {
-    NotConnected { host: Arc<String> },
-    Connected,
-    Waiting,
+pub struct Connection {
+    stream: BufferedIo<TcpStream>,
+    peer_addr: SocketAddr,
 }
 impl Connection {
-    pub fn new(host: String) -> Self {
-        Connection::NotConnected {
-            host: Arc::new(host),
+    pub fn new(peer_addr: SocketAddr, stream: TcpStream) -> Self {
+        let _ = stream.set_nodelay(true);
+        Connection {
+            peer_addr,
+            stream: BufferedIo::new(stream, 4096, 4096), // TODO
         }
     }
 
-    pub fn connect(&mut self) -> Connect {
-        Connect
-    }
-}
-
-#[derive(Debug)]
-pub struct Connect;
-impl Future for Connect {
-    type Item = TcpStream;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        panic!()
-    }
-}
-
-// TODO: nodelay
-
-#[derive(Debug)]
-pub struct TcpStream(fibers::net::TcpStream);
-impl TcpStream {
-    pub fn read_buf(&mut self) -> &mut ReadBuf<Vec<u8>> {
-        panic!()
+    pub fn stream_ref(&self) -> &BufferedIo<TcpStream> {
+        &self.stream
     }
 
-    pub fn write_buf(&mut self) -> &mut WriteBuf<Vec<u8>> {
-        panic!()
+    pub fn stream_mut(&mut self) -> &mut BufferedIo<TcpStream> {
+        &mut self.stream
     }
 
-    pub fn state(&self) -> StreamState {
-        panic!()
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr
     }
 }

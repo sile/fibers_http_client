@@ -8,7 +8,7 @@ use httpcodec::{
     RequestEncoder, RequestTarget, Response, ResponseDecoder,
 };
 
-use connection::TcpStream;
+//use connection::TcpStream;
 use {Error, ErrorKind, Result};
 
 #[derive(Debug)]
@@ -72,20 +72,21 @@ impl<'a, B, E: Encode, D: Decode> RequestBuilder<'a, B, E, D> {
 }
 impl<'a, E: Encode, D: Decode> RequestBuilder<'a, E::Item, E, D> {
     pub fn execute(self) -> impl Future<Item = Response<D::Item>, Error = Error> {
-        let request = self.request;
-        let mut encoder = RequestEncoder::new(BodyEncoder::new(self.encoder));
-        let decoder = ResponseDecoder::new(BodyDecoder::new(self.decoder));
-        self.connection
-            .connect()
-            .and_then(move |stream| {
-                track!(encoder.start_encoding(request))?;
-                Ok((stream, encoder))
-            })
-            .and_then(move |(stream, encoder)| Execute {
-                stream,
-                encoder,
-                decoder,
-            })
+        // let request = self.request;
+        // let mut encoder = RequestEncoder::new(BodyEncoder::new(self.encoder));
+        // let decoder = ResponseDecoder::new(BodyDecoder::new(self.decoder));
+        // self.connection
+        //     .connect()
+        //     .and_then(move |stream| {
+        //         track!(encoder.start_encoding(request))?;
+        //         Ok((stream, encoder))
+        //     })
+        //     .and_then(move |(stream, encoder)| Execute {
+        //         stream,
+        //         encoder,
+        //         decoder,
+        //     })
+        ::futures::finished(panic!())
     }
 }
 
@@ -95,7 +96,7 @@ where
     E: Encode,
     D: Decode,
 {
-    stream: TcpStream,
+    //stream: TcpStream,
     encoder: RequestEncoder<BodyEncoder<E>>,
     decoder: ResponseDecoder<BodyDecoder<D>>, // TODO: support head
 }
@@ -109,22 +110,22 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            track!(self.encoder.encode_to_write_buf(self.stream.write_buf()))?;
-            track!(self.decoder.decode_from_read_buf(self.stream.read_buf()))?;
-            if self.decoder.is_idle() {
-                if self.encoder.is_idle() {
-                    // TODO: return connection to client (todo: connection header)
-                }
-                let response = track!(self.decoder.finish_decoding())?;
-                return Ok(Async::Ready(response));
-            }
+            // track!(self.encoder.encode_to_write_buf(self.stream.write_buf()))?;
+            // track!(self.decoder.decode_from_read_buf(self.stream.read_buf()))?;
+            // if self.decoder.is_idle() {
+            //     if self.encoder.is_idle() {
+            //         // TODO: return connection to client (todo: connection header)
+            //     }
+            //     let response = track!(self.decoder.finish_decoding())?;
+            //     return Ok(Async::Ready(response));
+            // }
 
-            if self.stream.state().is_eos() {
-                track_panic!(ErrorKind::UnexpectedEos);
-            }
-            if self.stream.state().would_block() {
-                break;
-            }
+            // if self.stream.state().is_eos() {
+            //     track_panic!(ErrorKind::UnexpectedEos);
+            // }
+            // if self.stream.state().would_block() {
+            //     break;
+            // }
         }
         Ok(Async::NotReady)
     }
