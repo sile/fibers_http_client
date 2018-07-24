@@ -2,6 +2,16 @@
 name = "fibers_http_client"
 version = "0.1.0"
 authors = ["Takeru Ohta <phjgt308@gmail.com>"]
+description = "A tiny asynchronous HTTP/1.1 client library"
+homepage = "https://github.com/sile/fibers_http_client"
+repository = "https://github.com/sile/fibers_http_client"
+readme = "README.md"
+categories = ["web-programming::http-client"]
+license = "MIT"
+
+[badges]
+travis-ci = {repository = "sile/fibers_http_client"}
+codecov = {repository = "sile/fibers_http_client"}
 
 [dependencies]
 bytecodec = "0.4"
