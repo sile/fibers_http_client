@@ -211,7 +211,7 @@ where
         let url = self.url;
         let mut server_addrs = track!(url.to_socket_addrs().map_err(Error::from); url)?;
         let server_addr = track_assert_some!(server_addrs.next(), ErrorKind::InvalidInput; url);
-        Ok(self.connection_provider.acqurie_connection(server_addr))
+        Ok(self.connection_provider.acquire_connection(server_addr))
     }
 
     fn execute<F>(
@@ -267,9 +267,17 @@ where
                 }
 
                 let res = track!(self.decoder.finish_decoding())?;
-                if res.header().get_field("Connection") == Some("close") {
-                    // TODO: HTTP/1.0
-                    do_close = true;
+                match res.http_version() {
+                    HttpVersion::V1_0 => {
+                        if res.header().get_field("Connection") != Some("keep-alive") {
+                            do_close = true;
+                        }
+                    }
+                    HttpVersion::V1_1 => {
+                        if res.header().get_field("Connection") == Some("close") {
+                            do_close = true;
+                        }
+                    }
                 }
                 response = Some(res);
                 break;

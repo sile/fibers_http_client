@@ -16,6 +16,7 @@ impl<C: AcquireConnection> Client<C> {
         }
     }
 
+    /// Returns a `RequestBuilder` instance for requesting to the given URL.
     pub fn request<'a>(&'a mut self, url: &'a Url) -> RequestBuilder<C> {
         RequestBuilder::new(&mut self.connection_provider, url)
     }
