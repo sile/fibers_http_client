@@ -36,6 +36,7 @@ impl From<url::ParseError> for Error {
 pub enum ErrorKind {
     InvalidInput,
     UnexpectedEos,
+    Timeout,
     Other,
 }
 impl TrackableErrorKind for ErrorKind {}

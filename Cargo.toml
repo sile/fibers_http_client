@@ -8,6 +8,9 @@ bytecodec = "0.4"
 fibers = "0.1"
 futures = "0.1"
 httpcodec = "0.2"
-slog = "2"
 trackable = "0.2"
 url = "1"
+
+[dev-dependencies]
+clap = "2"
+fibers_http_server = "0.1"

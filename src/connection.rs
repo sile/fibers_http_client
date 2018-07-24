@@ -1,31 +1,28 @@
-use bytecodec::io::BufferedIo;
+use bytecodec::io::{BufferedIo, StreamState};
 use fibers::net::TcpStream;
 use futures::Future;
 use std::net::SocketAddr;
 
-use {BoxFuture, Error};
+use Error;
 
-pub trait ConnectionPool {
-    fn acqurie_connection(&mut self, addr: SocketAddr) -> BoxFuture<Connection>;
-    fn release_connection(&mut self, connection: Connection);
+pub trait AcquireConnection {
+    type Connection: AsMut<Connection>;
+    type Future: Future<Item = Self::Connection, Error = Error>;
+
+    fn acqurie_connection(&mut self, addr: SocketAddr) -> Self::Future;
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct OneshotConnectionPool(());
-impl OneshotConnectionPool {
-    pub fn new() -> Self {
-        OneshotConnectionPool(())
-    }
-}
-impl ConnectionPool for OneshotConnectionPool {
-    fn acqurie_connection(&mut self, addr: SocketAddr) -> BoxFuture<Connection> {
+pub struct Oneshot;
+impl AcquireConnection for Oneshot {
+    type Connection = Connection;
+    type Future = Box<Future<Item = Self::Connection, Error = Error> + Send + 'static>;
+    fn acqurie_connection(&mut self, addr: SocketAddr) -> Self::Future {
         let future = TcpStream::connect(addr)
             .map_err(move |e| track!(Error::from(e); addr))
             .map(move |stream| Connection::new(addr, stream));
         Box::new(future)
     }
-
-    fn release_connection(&mut self, _connection: Connection) {}
 }
 
 #[derive(Debug)]
@@ -42,6 +39,10 @@ impl Connection {
         }
     }
 
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr
+    }
+
     pub fn stream_ref(&self) -> &BufferedIo<TcpStream> {
         &self.stream
     }
@@ -50,7 +51,13 @@ impl Connection {
         &mut self.stream
     }
 
-    pub fn peer_addr(&self) -> SocketAddr {
-        self.peer_addr
+    pub(crate) fn close(&mut self) {
+        *self.stream.read_buf_mut().stream_state_mut() = StreamState::Eos;
+        *self.stream.write_buf_mut().stream_state_mut() = StreamState::Eos;
+    }
+}
+impl AsMut<Connection> for Connection {
+    fn as_mut(&mut self) -> &mut Self {
+        self
     }
 }

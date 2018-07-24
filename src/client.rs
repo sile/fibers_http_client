@@ -1,38 +1,22 @@
-use connection::Connection;
+use url::Url;
 
-use {ConnectionPool, OneshotConnectionPool, RequestBuilder, Result};
+use connection::{AcquireConnection, Oneshot};
+use RequestBuilder;
 
 /// HTTP client.
-#[derive(Debug, Clone, Default)]
-pub struct Client<P> {
-    pool: P,
+#[derive(Debug, Default, Clone)]
+pub struct Client<C = Oneshot> {
+    connection_provider: C,
 }
-impl<P: ConnectionPool> Client<P> {
-    pub fn new(connection_pool: P) -> Self {
+impl<C: AcquireConnection> Client<C> {
+    /// Makes a new `Client` instance.
+    pub fn new(connection_provider: C) -> Self {
         Client {
-            pool: connection_pool,
+            connection_provider,
         }
     }
 
-    pub fn get_request(&mut self, path: &str) -> Result<RequestBuilder<P>> {
-        track!(RequestBuilder::new(
-            &mut self.pool,
-            "GET",
-            path,
-            vec![],
-            Default::default(),
-            Default::default()
-        ))
+    pub fn request<'a>(&'a mut self, url: &'a Url) -> RequestBuilder<C> {
+        RequestBuilder::new(&mut self.connection_provider, url)
     }
-
-    // pub fn put_request<B>(&mut self, path: &str, body: B) -> Result<RequestBuilder<B>> {
-    //     track!(RequestBuilder::new(
-    //         &mut self.connection,
-    //         "PUT",
-    //         path,
-    //         body,
-    //         Default::default(),
-    //         Default::default()
-    //     ))
-    // }
 }
