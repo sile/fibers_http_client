@@ -40,6 +40,7 @@ pub use error::{Error, ErrorKind};
 pub use request::RequestBuilder;
 
 mod client;
+mod connection_pool;
 mod error;
 mod request;
 

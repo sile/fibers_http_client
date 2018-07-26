@@ -6,6 +6,8 @@ use std::net::SocketAddr;
 
 use Error;
 
+pub use connection_pool::{ConnectionPool, ConnectionPoolBuilder, ConnectionPoolHandle};
+
 const BUF_SIZE: usize = 4096; // FIXME: parameterize
 
 /// This trait allows for acquiring TCP connections.
