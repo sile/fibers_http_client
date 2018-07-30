@@ -23,4 +23,5 @@ url = "1"
 
 [dev-dependencies]
 clap = "2"
+fibers_global = "0.1"
 fibers_http_server = "0.1"

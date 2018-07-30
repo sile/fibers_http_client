@@ -28,6 +28,8 @@
 extern crate bytecodec;
 extern crate fibers;
 #[cfg(test)]
+extern crate fibers_global;
+#[cfg(test)]
 extern crate fibers_http_server;
 extern crate futures;
 extern crate httpcodec;
@@ -60,6 +62,7 @@ mod test {
     use url::Url;
 
     use super::*;
+    use connection::ConnectionPool;
 
     struct Hello;
     impl HandleRequest for Hello {
@@ -78,22 +81,20 @@ mod test {
     }
 
     #[test]
-    fn it_works() {
+    fn oneshot_connection_works() {
         let addr = "127.0.0.1:14757".parse().unwrap();
-        let mut executor = InPlaceExecutor::new().unwrap();
 
         // server
         let mut builder = ServerBuilder::new(addr);
         builder.add_handler(Hello).unwrap();
-        let server = builder.finish(executor.handle());
-        executor.spawn(server.map_err(|e| panic!("{}", e)));
+        let server = builder.finish(fibers_global::handle());
+        fibers_global::spawn(server.map_err(|e| panic!("{}", e)));
 
         // client: GET => 200
         let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
         let mut client = Client::new(connection::Oneshot);
         let future = client.request(&url).get();
-        let monitor = executor.spawn_monitor(future);
-        let response = executor.run_fiber(monitor).unwrap().unwrap();
+        let response = fibers_global::execute(future).unwrap();
         assert_eq!(response.status_code().as_u16(), 200);
         assert_eq!(response.body(), b"hello");
 
@@ -101,16 +102,52 @@ mod test {
         let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
         let mut client = Client::new(connection::Oneshot);
         let future = client.request(&url).delete();
-        let monitor = executor.spawn_monitor(future);
-        let response = executor.run_fiber(monitor).unwrap().unwrap();
+        let response = fibers_global::execute(future).unwrap();
         assert_eq!(response.status_code().as_u16(), 405);
 
         // client: PUT => 404
         let url = Url::parse(&format!("http://{}/world", addr)).unwrap();
         let mut client = Client::new(connection::Oneshot);
         let future = client.request(&url).put(vec![1, 2, 3]);
-        let monitor = executor.spawn_monitor(future);
-        let response = executor.run_fiber(monitor).unwrap().unwrap();
+        let response = fibers_global::execute(future).unwrap();
+        assert_eq!(response.status_code().as_u16(), 404);
+    }
+
+    #[test]
+    fn connection_pool_works() {
+        let addr = "127.0.0.1:14758".parse().unwrap();
+
+        // server
+        let mut builder = ServerBuilder::new(addr);
+        builder.add_handler(Hello).unwrap();
+        let server = builder.finish(fibers_global::handle());
+        fibers_global::spawn(server.map_err(|e| panic!("{}", e)));
+
+        // connection pool
+        let pool = ConnectionPool::new(fibers_global::handle());
+        let pool_handle = pool.handle();
+        fibers_global::spawn(pool.map_err(|e| panic!("{}", e)));
+
+        // client: GET => 200
+        let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
+        let mut client = Client::new(pool_handle);
+        let future = client.request(&url).get();
+        let response = fibers_global::execute(future).unwrap();
+        assert_eq!(response.status_code().as_u16(), 200);
+        assert_eq!(response.body(), b"hello");
+
+        // client: DELETE => 405
+        let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
+        let mut client = Client::new(connection::Oneshot);
+        let future = client.request(&url).delete();
+        let response = fibers_global::execute(future).unwrap();
+        assert_eq!(response.status_code().as_u16(), 405);
+
+        // client: PUT => 404
+        let url = Url::parse(&format!("http://{}/world", addr)).unwrap();
+        let mut client = Client::new(connection::Oneshot);
+        let future = client.request(&url).put(vec![1, 2, 3]);
+        let response = fibers_global::execute(future).unwrap();
         assert_eq!(response.status_code().as_u16(), 404);
     }
 }
