@@ -4,14 +4,19 @@ use fibers::sync::{mpsc, oneshot};
 use fibers::time::timer::TimerExt;
 use fibers::{BoxSpawn, Spawn};
 use futures::{Async, Future, Poll, Stream};
-use std::cmp::{Ordering, Reverse};
-use std::collections::{BinaryHeap, HashMap, VecDeque};
-use std::net::SocketAddr;
-use std::time::{Duration, SystemTime};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::time::{Duration, Instant, SystemTime};
 use trackable::error::ErrorKindExt;
 
 use connection::{AcquireConnection, Connection};
 use {Error, ErrorKind, Result};
+
+const CONNECT_TIMEOUT_SECS: u64 = 5; // TODO: parameter
+const KEEP_ALIVE_TIMEOUT_SECS: u64 = 10; // TODO
+
+// TODO: metrics
 
 #[derive(Debug)]
 pub struct ConnectionPoolBuilder;
@@ -25,56 +30,52 @@ impl ConnectionPoolBuilder {
         S: Spawn + Send + 'static,
     {
         let (command_tx, command_rx) = mpsc::channel();
-        // TODO: keepalive-timeout, remove closed connection
         ConnectionPool {
             spawner: spawner.boxed(),
             command_tx,
             command_rx,
-            connections: HashMap::new(),
+            pooled_connections: BTreeMap::new(),
+            lending_connections: HashMap::new(),
             timeout_queue: VecDeque::new(),
-            pool_size: 0,
             max_pool_size: 4096, // TODO
         }
     }
 }
-// TODO: add connect timeout
 
-#[derive(Debug)]
-struct ConnectionState {
-    // addr: SocketAddr,
-    connection: Option<Connection>,
-    last_used_time: SystemTime,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConnectionKey {
+    addr: SocketAddr,
+    pooled_time: Option<Instant>,
 }
-impl ConnectionState {
-    fn new() -> Self {
-        ConnectionState {
-            connection: None,
-            last_used_time: SystemTime::now(),
+impl ConnectionKey {
+    fn new(addr: SocketAddr) -> Self {
+        ConnectionKey {
+            addr,
+            pooled_time: Some(Instant::now()),
         }
     }
 
-    fn key(&self) -> Option<Reverse<SystemTime>> {
-        self.connection
-            .as_ref()
-            .map(|_| Reverse(self.last_used_time))
+    fn lower_bound(addr: SocketAddr) -> Self {
+        ConnectionKey {
+            addr,
+            pooled_time: None,
+        }
+    }
+
+    fn key(&self) -> (IpAddr, u16, Option<Instant>) {
+        (self.addr.ip(), self.addr.port(), self.pooled_time)
     }
 }
-impl PartialOrd for ConnectionState {
+impl PartialOrd for ConnectionKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.key().partial_cmp(&other.key())
     }
 }
-impl Ord for ConnectionState {
+impl Ord for ConnectionKey {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key().cmp(&other.key())
     }
 }
-impl PartialEq for ConnectionState {
-    fn eq(&self, other: &Self) -> bool {
-        self.key() == other.key()
-    }
-}
-impl Eq for ConnectionState {}
 
 #[derive(Debug)]
 #[must_use = "futures do nothing unless polled"]
@@ -82,8 +83,8 @@ pub struct ConnectionPool {
     spawner: BoxSpawn,
     command_tx: mpsc::Sender<Command>,
     command_rx: mpsc::Receiver<Command>,
-    connections: HashMap<SocketAddr, BinaryHeap<ConnectionState>>,
-    pool_size: usize,
+    pooled_connections: BTreeMap<ConnectionKey, Connection>,
+    lending_connections: HashMap<SocketAddr, usize>,
     max_pool_size: usize,
     timeout_queue: VecDeque<(SystemTime, SocketAddr)>,
 }
@@ -101,29 +102,45 @@ impl ConnectionPool {
         }
     }
 
-    fn acquire(&mut self, addr: SocketAddr) -> Result<Option<RentedConnection>> {
-        if let Some(queue) = self.connections.get_mut(&addr) {
-            let mut state = queue.pop().expect("never fails");
-            let connection = state.connection.take();
-            queue.push(state);
+    fn pool_size(&self) -> usize {
+        // TODO
+        self.pooled_connections.len() + self.lending_connections.values().sum::<usize>()
+    }
 
-            if let Some(connection) = connection {
-                let rented = RentedConnection {
-                    connection: Some(connection),
-                    command_tx: self.command_tx.clone(),
-                };
-                return Ok(Some(rented));
-            }
+    fn lend_pooled_connection(&mut self, addr: SocketAddr) -> Option<Connection> {
+        let lower = ConnectionKey::lower_bound(addr);
+        if let Some(key) = self.pooled_connections
+            .range(lower..)
+            .nth(0)
+            .and_then(|(key, _)| {
+                if key.addr == addr {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            }) {
+            let connection = self.pooled_connections.remove(&key).expect("never fails");
+            *self.lending_connections.entry(addr).or_insert(0) += 1;
+            Some(connection)
+        } else {
+            None
         }
-        if self.pool_size == self.max_pool_size {
+    }
+
+    fn acquire(&mut self, addr: SocketAddr) -> Result<Option<RentedConnection>> {
+        if let Some(connection) = self.lend_pooled_connection(addr) {
+            let rented = RentedConnection {
+                connection: Some(connection),
+                command_tx: self.command_tx.clone(),
+            };
+            return Ok(Some(rented));
+        }
+
+        if self.pool_size() == self.max_pool_size {
             // TODO: kicked-out
         }
 
-        self.pool_size += 1;
-        self.connections
-            .entry(addr)
-            .or_insert_with(BinaryHeap::new)
-            .push(ConnectionState::new());
+        *self.lending_connections.entry(addr).or_insert(0) += 1;
         Ok(None)
     }
 
@@ -138,7 +155,28 @@ impl ConnectionPool {
                     self.spawner.spawn(future);
                 }
             },
-            Command::Release { connection } => {}
+            Command::Missing { addr } => {
+                *self.lending_connections
+                    .get_mut(&addr)
+                    .expect("never fails") -= 1;
+                if self.lending_connections[&addr] == 0 {
+                    self.lending_connections.remove(&addr);
+                }
+            }
+            Command::Release { connection } => {
+                let addr = connection.peer_addr();
+
+                *self.lending_connections
+                    .get_mut(&addr)
+                    .expect("never fails") -= 1;
+                if self.lending_connections[&addr] == 0 {
+                    self.lending_connections.remove(&addr);
+                }
+
+                self.pooled_connections
+                    .insert(ConnectionKey::new(addr), connection);
+                // TODO: add to timeout queue
+            }
         }
     }
 }
@@ -147,6 +185,7 @@ impl Future for ConnectionPool {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        // TODO: keep-alive timeout
         while let Async::Ready(command) = self.command_rx.poll().expect("never fails") {
             let command = command.expect("never fails");
             self.handle_command(command);
@@ -183,6 +222,9 @@ enum Command {
         addr: SocketAddr,
         reply_tx: oneshot::Monitored<RentedConnection, Error>,
     },
+    Missing {
+        addr: SocketAddr,
+    },
     Release {
         connection: Connection,
     },
@@ -208,9 +250,14 @@ impl AsMut<Connection> for RentedConnection {
 }
 impl Drop for RentedConnection {
     fn drop(&mut self) {
-        // TODO: return error if failed or eos
         let connection = self.connection.take().expect("never fails");
-        let command = Command::Release { connection };
+        let command = if connection.is_recyclable() {
+            Command::Release { connection }
+        } else {
+            Command::Missing {
+                addr: connection.peer_addr(),
+            }
+        };
         let _ = self.command_tx.send(command);
     }
 }
@@ -225,7 +272,7 @@ impl Connect {
     fn new(addr: SocketAddr, command_tx: mpsc::Sender<Command>) -> Self {
         let future = TcpStream::connect(addr)
             .map_err(|e| track!(Error::from(e)))
-            .timeout_after(Duration::from_secs(5)) // TODO
+            .timeout_after(Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .map_err(|e| {
                 e.unwrap_or_else(|| track!(ErrorKind::Timeout.cause("TCP connect timeout")).into())
             });
@@ -243,7 +290,8 @@ impl Future for Connect {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match track!(self.future.poll(); self.addr) {
             Err(e) => {
-                // TODO: self.command_tx.end(Release::Error)
+                let command = Command::Missing { addr: self.addr };
+                let _ = self.command_tx.send(command);
                 Err(e)
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),

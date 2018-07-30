@@ -61,9 +61,11 @@ impl Connection {
         self.peer_addr
     }
 
-    /// Returns `true` if the connection reached EOS, otherwise `false`.
-    pub fn is_eos(&self) -> bool {
-        self.stream.is_eos()
+    /// Returns `true` if the connection can be reuse for a next HTTP request, otherwise `false`.
+    pub fn is_recyclable(&self) -> bool {
+        !(self.stream.is_eos()
+            || self.stream.write_buf_ref().stream_state().is_error()
+            || self.stream.read_buf_ref().stream_state().is_error())
     }
 
     pub(crate) fn stream_mut(&mut self) -> &mut BufferedIo<TcpStream> {
