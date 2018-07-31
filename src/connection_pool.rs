@@ -105,7 +105,28 @@ impl Default for ConnectionPoolBuilder {
 ///
 /// # Examples
 ///
-/// TODO
+/// ```
+/// # extern crate fibers_global;
+/// # extern crate fibers_http_client;
+/// # extern crate futures;
+/// # extern crate url;
+/// use fibers_http_client::connection::ConnectionPool;
+/// use fibers_http_client::Client;
+/// use futures::Future;
+/// use url::Url;
+///
+/// # fn main() {
+/// let pool = ConnectionPool::new(fibers_global::handle());
+/// let pool_handle = pool.handle();
+/// fibers_global::spawn(pool.map_err(|e| panic!("{}", e)));
+///
+/// let mut client = Client::new(pool_handle);
+/// let url = Url::parse("http://localhost/foo/bar").unwrap();
+///
+/// let future = client.request(&url).get();
+/// let result = fibers_global::execute(future);
+/// # }
+/// ```
 ///
 #[derive(Debug)]
 #[must_use = "futures do nothing unless polled"]
@@ -156,7 +177,7 @@ impl ConnectionPool {
         }
 
         if self.state.pool_size == self.max_pool_size {
-            if self.state.discard_oldest_pooled_connection() {
+            if self.state.discard_oldest_pooled_connection().is_some() {
                 self.metrics.kicked_out_connections.increment();
             } else {
                 self.metrics.no_available_connection_errors.increment();
@@ -167,7 +188,7 @@ impl ConnectionPool {
                 );
             }
         }
-        self.state.lend_new_connection(addr);
+        self.state.allocate_connection();
         self.metrics.allocated_connections.increment();
         Ok(None)
     }
@@ -183,13 +204,16 @@ impl ConnectionPool {
                 Ok(None) => {
                     self.metrics.lent_connections.increment();
                     let future = Connect::new(addr, self.command_tx.clone(), self.connect_timeout)
-                        .then(move |result| Ok(reply_tx.exit(result)));
+                        .then(move |result| {
+                            reply_tx.exit(result);
+                            Ok(())
+                        });
                     self.spawner.spawn(future);
                 }
             },
-            Command::Discard { addr, reason } => {
+            Command::Discard { reason } => {
                 self.metrics.returned_connections.increment();
-                self.state.discard_connection(addr);
+                self.state.release_connection();
                 match reason {
                     DiscardReason::Closed => {
                         self.metrics.closed_connections.increment();
@@ -204,7 +228,8 @@ impl ConnectionPool {
             }
             Command::Reuse { connection } => {
                 self.metrics.returned_connections.increment();
-                self.state.pool_connection(connection);
+                self.state
+                    .pool_connection(connection.peer_addr(), connection);
             }
         }
     }
@@ -278,11 +303,9 @@ impl Drop for RentedConnection {
         let command = match connection.state() {
             ConnectionState::Recyclable => Command::Reuse { connection },
             ConnectionState::Closed => Command::Discard {
-                addr: connection.peer_addr(),
                 reason: DiscardReason::Closed,
             },
             ConnectionState::InUse => Command::Discard {
-                addr: connection.peer_addr(),
                 reason: DiscardReason::RequestFailed,
             },
         };
@@ -300,7 +323,6 @@ enum Command {
         connection: Connection,
     },
     Discard {
-        addr: SocketAddr,
         reason: DiscardReason,
     },
 }
@@ -333,7 +355,6 @@ impl Future for Connect {
         match track!(self.future.poll(); self.addr) {
             Err(e) => {
                 let command = Command::Discard {
-                    addr: self.addr,
                     reason: DiscardReason::ConnectFailed,
                 };
                 let _ = self.command_tx.send(command);
@@ -352,13 +373,13 @@ impl Future for Connect {
 }
 
 #[derive(Debug)]
-struct ConnectionPoolState {
-    pooled_connections: BTreeMap<PoolKey, Connection>,
+struct ConnectionPoolState<C = Connection> {
+    pooled_connections: BTreeMap<PoolKey, C>,
     timeout_queue: BinaryHeap<QueueEntry>,
     elapsed_time: Duration, // Approximate elapsed time since the pool was created
     pool_size: usize,
 }
-impl ConnectionPoolState {
+impl<C> ConnectionPoolState<C> {
     fn new() -> Self {
         ConnectionPoolState {
             pooled_connections: BTreeMap::new(),
@@ -368,11 +389,16 @@ impl ConnectionPoolState {
         }
     }
 
-    fn lend_new_connection(&mut self, _addr: SocketAddr) {
+    fn allocate_connection(&mut self) {
         self.pool_size += 1;
     }
 
-    fn lend_pooled_connection(&mut self, addr: SocketAddr) -> Option<Connection> {
+    fn release_connection(&mut self) {
+        assert!(self.pool_size > 0);
+        self.pool_size -= 1;
+    }
+
+    fn lend_pooled_connection(&mut self, addr: SocketAddr) -> Option<C> {
         // Tries to select the most recently used connection
         let (lower, upper) = PoolKey::range(addr);
         let selected = self.pooled_connections
@@ -388,20 +414,18 @@ impl ConnectionPoolState {
         }
     }
 
-    fn discard_oldest_pooled_connection(&mut self) -> bool {
+    fn discard_oldest_pooled_connection(&mut self) -> Option<C> {
         while let Some(entry) = self.timeout_queue.pop() {
-            let removed = self.pooled_connections
-                .remove(&entry.to_pool_key())
-                .is_some();
+            let removed = self.pooled_connections.remove(&entry.to_pool_key());
             if let Some(key) = self.get_oldest(entry.socket_addr()) {
                 self.timeout_queue.push(key.to_queue_entry());
             }
-            if removed {
-                self.pool_size -= 1;
-                return true;
+            if removed.is_some() {
+                self.release_connection();
+                return removed;
             }
         }
-        false
+        None
     }
 
     fn get_oldest(&self, addr: SocketAddr) -> Option<PoolKey> {
@@ -412,8 +436,7 @@ impl ConnectionPoolState {
             .map(|(key, _)| key.clone())
     }
 
-    fn pool_connection(&mut self, connection: Connection) {
-        let addr = connection.peer_addr();
+    fn pool_connection(&mut self, addr: SocketAddr, connection: C) {
         let key = PoolKey::new(addr, self.elapsed_time);
         if !self.pool_contains(addr) {
             self.timeout_queue.push(key.to_queue_entry());
@@ -424,10 +447,6 @@ impl ConnectionPoolState {
     fn pool_contains(&self, addr: SocketAddr) -> bool {
         let (lower, upper) = PoolKey::range(addr);
         self.pooled_connections.range(lower..upper).nth(0).is_some()
-    }
-
-    fn discard_connection(&mut self, _addr: SocketAddr) {
-        self.pool_size -= 1;
     }
 
     fn tick(&mut self, duration: Duration, keepalive_timeout: Duration) -> usize {
@@ -441,7 +460,7 @@ impl ConnectionPoolState {
                     .remove(&entry.to_pool_key())
                     .is_some();
                 if removed {
-                    self.pool_size -= 1;
+                    self.release_connection();
                     removed_count += 1;
                 }
                 if let Some(key) = self.get_oldest(entry.socket_addr()) {
@@ -514,5 +533,131 @@ enum DiscardReason {
 
 #[cfg(test)]
 mod tests {
-    // TODO
+    use super::*;
+
+    #[test]
+    fn allocate_and_release_works() {
+        let mut state = ConnectionPoolState::<&'static str>::new();
+
+        state.allocate_connection();
+        assert_eq!(state.pool_size, 1);
+
+        state.release_connection();
+        assert_eq!(state.pool_size, 0);
+    }
+
+    #[test]
+    fn lend_works() {
+        let mut state = ConnectionPoolState::<&'static str>::new();
+        for _ in 0..4 {
+            state.allocate_connection();
+        }
+        state.pool_connection(addr(80), "foo");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(80), "bar");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(80), "baz");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(90), "qux");
+        state.tick(secs(1), secs(100));
+
+        assert_eq!(state.lend_pooled_connection(addr(79)), None);
+        assert_eq!(state.lend_pooled_connection(addr(81)), None);
+        assert_eq!(state.lend_pooled_connection(addr(80)), Some("baz"));
+        assert_eq!(state.lend_pooled_connection(addr(80)), Some("bar"));
+        assert_eq!(state.lend_pooled_connection(addr(80)), Some("foo"));
+        assert_eq!(state.lend_pooled_connection(addr(80)), None);
+    }
+
+    #[test]
+    fn discard_oldest_pooled_connection_works() {
+        let mut state = ConnectionPoolState::<&'static str>::new();
+
+        // All connections are in pool
+        for _ in 0..3 {
+            state.allocate_connection();
+        }
+
+        state.pool_connection(addr(80), "foo");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(90), "bar");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(80), "baz");
+        state.tick(secs(1), secs(100));
+
+        assert_eq!(state.pool_size, 3);
+        assert_eq!(state.discard_oldest_pooled_connection(), Some("foo"));
+        assert_eq!(state.discard_oldest_pooled_connection(), Some("bar"));
+        assert_eq!(state.discard_oldest_pooled_connection(), Some("baz"));
+        assert_eq!(state.discard_oldest_pooled_connection(), None);
+        assert_eq!(state.pool_size, 0);
+
+        // One connection is lent
+        for _ in 0..3 {
+            state.allocate_connection();
+        }
+
+        state.pool_connection(addr(80), "foo");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(90), "bar");
+        state.tick(secs(1), secs(100));
+
+        state.pool_connection(addr(80), "baz");
+        state.tick(secs(1), secs(100));
+
+        assert_eq!(state.lend_pooled_connection(addr(90)), Some("bar"));
+
+        assert_eq!(state.pool_size, 3);
+        assert_eq!(state.discard_oldest_pooled_connection(), Some("foo"));
+        assert_eq!(state.discard_oldest_pooled_connection(), Some("baz"));
+        assert_eq!(state.discard_oldest_pooled_connection(), None);
+        assert_eq!(state.pool_size, 1);
+    }
+
+    #[test]
+    fn tick_works() {
+        let mut state = ConnectionPoolState::<&'static str>::new();
+
+        for _ in 0..3 {
+            state.allocate_connection();
+        }
+
+        state.pool_connection(addr(80), "foo");
+        state.tick(secs(1), secs(3));
+
+        state.pool_connection(addr(90), "bar");
+        state.tick(secs(1), secs(3));
+
+        state.pool_connection(addr(80), "baz");
+        state.tick(secs(1), secs(3));
+
+        assert_eq!(state.elapsed_time, secs(3));
+        assert_eq!(state.pool_size, 3);
+
+        let expired_count = state.tick(secs(1), secs(3));
+        assert_eq!(expired_count, 1);
+        assert_eq!(state.pool_size, 2);
+
+        assert_eq!(state.lend_pooled_connection(addr(80)), Some("baz"));
+        assert_eq!(state.lend_pooled_connection(addr(90)), Some("bar"));
+        assert_eq!(state.lend_pooled_connection(addr(80)), None);
+
+        let expired_count = state.tick(secs(1), secs(3));
+        assert_eq!(expired_count, 0);
+        assert_eq!(state.pool_size, 2);
+    }
+
+    fn addr(port: u16) -> SocketAddr {
+        ([127, 0, 0, 1], port).into()
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
 }
