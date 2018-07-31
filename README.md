@@ -16,7 +16,6 @@ Examples
 ---------
 
 ```rust
-use fibers::{Executor, InPlaceExecutor, Spawn};
 use fibers_http_client::connection::Oneshot;
 use fibers_http_client::Client;
 use url::Url;
@@ -25,9 +24,7 @@ let url = Url::parse("http://localhost/foo/bar").unwrap();
 let mut client = Client::new(Oneshot);
 let future = client.request(&url).get();
 
-let mut executor = InPlaceExecutor::new().unwrap();
-let monitor = executor.spawn_monitor(future);
-let response = executor.run_fiber(monitor).unwrap().unwrap();
+let response = fibers_global::execute(future).unwrap();
 println!("STATUS: {:?}", response.status_code());
 println!("BODY: {:?}", response.body());
 ```

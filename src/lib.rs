@@ -3,11 +3,9 @@
 //! # Examples
 //!
 //! ```no_run
-//! # extern crate fibers;
+//! # extern crate fibers_global;
 //! # extern crate fibers_http_client;
-//! # extern crate futures;
 //! # extern crate url;
-//! use fibers::{Executor, InPlaceExecutor, Spawn};
 //! use fibers_http_client::connection::Oneshot;
 //! use fibers_http_client::Client;
 //! use url::Url;
@@ -17,9 +15,7 @@
 //! let mut client = Client::new(Oneshot);
 //! let future = client.request(&url).get();
 //!
-//! let mut executor = InPlaceExecutor::new().unwrap();
-//! let monitor = executor.spawn_monitor(future);
-//! let response = executor.run_fiber(monitor).unwrap().unwrap();
+//! let response = fibers_global::execute(future).unwrap();
 //! println!("STATUS: {:?}", response.status_code());
 //! println!("BODY: {:?}", response.body());
 //! # }
@@ -33,6 +29,7 @@ extern crate fibers_global;
 extern crate fibers_http_server;
 extern crate futures;
 extern crate httpcodec;
+extern crate prometrics;
 #[macro_use]
 extern crate trackable;
 extern crate url;
@@ -47,6 +44,7 @@ mod error;
 mod request;
 
 pub mod connection;
+pub mod metrics;
 
 /// This crate specific `Result` type.
 pub type Result<T> = std::result::Result<T, Error>;

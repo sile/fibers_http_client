@@ -13,6 +13,11 @@ impl From<std::io::Error> for Error {
         ErrorKind::Other.cause(f).into()
     }
 }
+impl From<std::sync::mpsc::RecvError> for Error {
+    fn from(f: std::sync::mpsc::RecvError) -> Self {
+        ErrorKind::Other.cause(f).into()
+    }
+}
 impl From<bytecodec::Error> for Error {
     fn from(f: bytecodec::Error) -> Self {
         let bytecodec_error_kind = *f.kind();
@@ -37,6 +42,7 @@ pub enum ErrorKind {
     InvalidInput,
     UnexpectedEos,
     Timeout,
+    TemporarilyUnavailable,
     Other,
 }
 impl TrackableErrorKind for ErrorKind {}

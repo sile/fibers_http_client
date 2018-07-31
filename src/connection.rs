@@ -1,12 +1,14 @@
 //! TCP connection.
-use bytecodec::io::{BufferedIo, StreamState};
+use bytecodec::io::BufferedIo;
 use fibers::net::TcpStream;
 use futures::Future;
 use std::net::SocketAddr;
 
 use Error;
 
-pub use connection_pool::{ConnectionPool, ConnectionPoolBuilder, ConnectionPoolHandle};
+pub use connection_pool::{
+    ConnectionPool, ConnectionPoolBuilder, ConnectionPoolHandle, RentedConnection,
+};
 
 const BUF_SIZE: usize = 4096; // FIXME: parameterize
 
@@ -45,6 +47,7 @@ impl AcquireConnection for Oneshot {
 pub struct Connection {
     stream: BufferedIo<TcpStream>,
     peer_addr: SocketAddr,
+    state: ConnectionState,
 }
 impl Connection {
     /// Makes a new `Connection` instance.
@@ -53,6 +56,7 @@ impl Connection {
         Connection {
             peer_addr,
             stream: BufferedIo::new(stream, BUF_SIZE, BUF_SIZE),
+            state: ConnectionState::InUse,
         }
     }
 
@@ -61,24 +65,27 @@ impl Connection {
         self.peer_addr
     }
 
-    /// Returns `true` if the connection can be reuse for a next HTTP request, otherwise `false`.
-    pub fn is_recyclable(&self) -> bool {
-        !(self.stream.is_eos()
-            || self.stream.write_buf_ref().stream_state().is_error()
-            || self.stream.read_buf_ref().stream_state().is_error())
+    pub(crate) fn state(&self) -> ConnectionState {
+        self.state
+    }
+
+    pub(crate) fn set_state(&mut self, state: ConnectionState) {
+        self.state = state;
     }
 
     pub(crate) fn stream_mut(&mut self) -> &mut BufferedIo<TcpStream> {
         &mut self.stream
-    }
-
-    pub(crate) fn close(&mut self) {
-        *self.stream.read_buf_mut().stream_state_mut() = StreamState::Eos;
-        *self.stream.write_buf_mut().stream_state_mut() = StreamState::Eos;
     }
 }
 impl AsMut<Connection> for Connection {
     fn as_mut(&mut self) -> &mut Self {
         self
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectionState {
+    InUse,
+    Recyclable,
+    Closed,
 }

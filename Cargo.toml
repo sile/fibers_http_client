@@ -18,6 +18,7 @@ bytecodec = "0.4"
 fibers = "0.1"
 futures = "0.1"
 httpcodec = "0.2"
+prometrics = "0.1"
 trackable = "0.2"
 url = "1"
 

@@ -1,7 +1,6 @@
 use bytecodec::bytes::{BytesEncoder, RemainingBytesDecoder};
 use bytecodec::io::{IoDecodeExt, IoEncodeExt};
 use bytecodec::{Decode, Encode};
-use connection::Connection;
 use fibers::time::timer::TimerExt;
 use futures::future::{failed, Either};
 use futures::{Async, Future, Poll};
@@ -15,7 +14,7 @@ use std::time::Duration;
 use trackable::error::ErrorKindExt;
 use url::{Position, Url};
 
-use connection::AcquireConnection;
+use connection::{AcquireConnection, Connection, ConnectionState};
 use {Error, ErrorKind, Result};
 
 /// HTTP request builder.
@@ -292,7 +291,11 @@ where
         }
         if let Some(response) = response {
             if do_close {
-                self.connection.as_mut().close();
+                self.connection.as_mut().set_state(ConnectionState::Closed);
+            } else {
+                self.connection
+                    .as_mut()
+                    .set_state(ConnectionState::Recyclable);
             }
             Ok(Async::Ready(response))
         } else {
