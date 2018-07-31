@@ -56,6 +56,7 @@ mod test {
     use fibers_http_server::{HandleRequest, Reply, Req, Res, ServerBuilder, Status};
     use futures::future::{ok, Future};
     use httpcodec::{BodyDecoder, BodyEncoder};
+    use std;
     use url::Url;
 
     use super::*;
@@ -86,6 +87,7 @@ mod test {
         builder.add_handler(Hello).unwrap();
         let server = builder.finish(fibers_global::handle());
         fibers_global::spawn(server.map_err(|e| panic!("{}", e)));
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         // client: GET => 200
         let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
@@ -119,6 +121,7 @@ mod test {
         builder.add_handler(Hello).unwrap();
         let server = builder.finish(fibers_global::handle());
         fibers_global::spawn(server.map_err(|e| panic!("{}", e)));
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         // connection pool
         let pool = ConnectionPool::new(fibers_global::handle());
