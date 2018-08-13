@@ -401,7 +401,8 @@ impl<C> ConnectionPoolState<C> {
     fn lend_pooled_connection(&mut self, addr: SocketAddr) -> Option<C> {
         // Tries to select the most recently used connection
         let (lower, upper) = PoolKey::range(addr);
-        let selected = self.pooled_connections
+        let selected = self
+            .pooled_connections
             .range(lower..upper)
             .rev()
             .nth(0)
@@ -456,7 +457,8 @@ impl<C> ConnectionPoolState<C> {
         while let Some(entry) = self.timeout_queue.peek().cloned() {
             if entry.pooled_time.0 + keepalive_timeout < now {
                 let _ = self.timeout_queue.pop();
-                let removed = self.pooled_connections
+                let removed = self
+                    .pooled_connections
                     .remove(&entry.to_pool_key())
                     .is_some();
                 if removed {
