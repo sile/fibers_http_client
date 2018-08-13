@@ -60,7 +60,7 @@ mod test {
     use url::Url;
 
     use super::*;
-    use connection::ConnectionPool;
+    use connection::ConnectionPoolBuilder;
 
     struct Hello;
     impl HandleRequest for Hello {
@@ -124,13 +124,16 @@ mod test {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         // connection pool
-        let pool = ConnectionPool::new(fibers_global::handle());
+        let pool = ConnectionPoolBuilder::new()
+            .max_pool_size(2)
+            .finish(fibers_global::handle());
         let pool_handle = pool.handle();
+        let metrics = pool.metrics().clone();
         fibers_global::spawn(pool.map_err(|e| panic!("{}", e)));
 
         // client: GET => 200
         let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
-        let mut client = Client::new(pool_handle);
+        let mut client = Client::new(pool_handle.clone());
         let future = client.request(&url).get();
         let response = fibers_global::execute(future).unwrap();
         assert_eq!(response.status_code().as_u16(), 200);
@@ -138,16 +141,19 @@ mod test {
 
         // client: DELETE => 405
         let url = Url::parse(&format!("http://{}/hello", addr)).unwrap();
-        let mut client = Client::new(connection::Oneshot);
+        let mut client = Client::new(pool_handle.clone());
         let future = client.request(&url).delete();
         let response = fibers_global::execute(future).unwrap();
         assert_eq!(response.status_code().as_u16(), 405);
 
         // client: PUT => 404
         let url = Url::parse(&format!("http://{}/world", addr)).unwrap();
-        let mut client = Client::new(connection::Oneshot);
+        let mut client = Client::new(pool_handle.clone());
         let future = client.request(&url).put(vec![1, 2, 3]);
         let response = fibers_global::execute(future).unwrap();
         assert_eq!(response.status_code().as_u16(), 404);
+
+        assert_eq!(metrics.lent_connections(), 3);
+        assert_eq!(metrics.returned_connections(), 3);
     }
 }
