@@ -378,6 +378,7 @@ struct ConnectionPoolState<C = Connection> {
     timeout_queue: BinaryHeap<QueueEntry>,
     elapsed_time: Duration, // Approximate elapsed time since the pool was created
     pool_size: usize,
+    seqno: u64,
 }
 impl<C> ConnectionPoolState<C> {
     fn new() -> Self {
@@ -386,6 +387,7 @@ impl<C> ConnectionPoolState<C> {
             timeout_queue: BinaryHeap::new(),
             elapsed_time: Duration::from_secs(0),
             pool_size: 0,
+            seqno: 0,
         }
     }
 
@@ -438,7 +440,9 @@ impl<C> ConnectionPoolState<C> {
     }
 
     fn pool_connection(&mut self, addr: SocketAddr, connection: C) {
-        let key = PoolKey::new(addr, self.elapsed_time);
+        let key = PoolKey::new(addr, self.elapsed_time, self.seqno);
+        self.seqno += 1;
+
         if !self.pool_contains(addr) {
             self.timeout_queue.push(key.to_queue_entry());
         }
@@ -481,19 +485,21 @@ struct PoolKey {
     addr: IpAddr,
     port: u16,
     pooled_time: Duration,
+    seqno: u64,
 }
 impl PoolKey {
-    fn new(addr: SocketAddr, now: Duration) -> Self {
+    fn new(addr: SocketAddr, now: Duration, seqno: u64) -> Self {
         PoolKey {
             addr: addr.ip(),
             port: addr.port(),
             pooled_time: now,
+            seqno,
         }
     }
 
     fn range(addr: SocketAddr) -> (Self, Self) {
-        let lower = PoolKey::new(addr, Duration::from_secs(0));
-        let upper = PoolKey::new(addr, Duration::from_secs(std::u64::MAX));
+        let lower = PoolKey::new(addr, Duration::from_secs(0), 0);
+        let upper = PoolKey::new(addr, Duration::from_secs(std::u64::MAX), std::u64::MAX);
         (lower, upper)
     }
 
@@ -502,6 +508,7 @@ impl PoolKey {
             pooled_time: Reverse(self.pooled_time),
             addr: self.addr,
             port: self.port,
+            seqno: self.seqno,
         }
     }
 }
@@ -511,6 +518,7 @@ struct QueueEntry {
     pooled_time: Reverse<Duration>,
     addr: IpAddr,
     port: u16,
+    seqno: u64,
 }
 impl QueueEntry {
     fn socket_addr(&self) -> SocketAddr {
@@ -522,6 +530,7 @@ impl QueueEntry {
             addr: self.addr,
             port: self.port,
             pooled_time: self.pooled_time.0,
+            seqno: self.seqno,
         }
     }
 }
