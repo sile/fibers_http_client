@@ -16,7 +16,7 @@ futures = "0.1"
 httpcodec = "0.2"
 prometrics = "0.1"
 trackable = "1"
-url = "1"
+url = "2"
 
 [dev-dependencies]
 clap = "2"

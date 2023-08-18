@@ -9,7 +9,6 @@ use httpcodec::{
     RequestEncoder, RequestTarget, Response, ResponseDecoder,
 };
 use std::borrow::Cow;
-use std::net::ToSocketAddrs;
 use std::time::Duration;
 use trackable::error::ErrorKindExt;
 use url::{Position, Url};
@@ -208,8 +207,9 @@ where
 
     fn connect(&mut self) -> Result<C::Future> {
         let url = self.url;
-        let mut server_addrs = track!(url.to_socket_addrs().map_err(Error::from); url)?;
-        let server_addr = track_assert_some!(server_addrs.next(), ErrorKind::InvalidInput; url);
+        let server_addrs = track!(url.socket_addrs(|| None).map_err(Error::from); url)?;
+        let server_addr =
+            track_assert_some!(server_addrs.get(0).copied(), ErrorKind::InvalidInput; url);
         Ok(self.connection_provider.acquire_connection(server_addr))
     }
 
