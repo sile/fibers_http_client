@@ -19,7 +19,7 @@ fibers = "0.1"
 futures = "0.1"
 httpcodec = "0.2"
 prometrics = "0.1"
-trackable = "0.2"
+trackable = "1"
 url = "1"
 
 [dev-dependencies]
