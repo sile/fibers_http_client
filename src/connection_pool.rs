@@ -262,7 +262,7 @@ pub struct ConnectionPoolHandle {
 }
 impl AcquireConnection for ConnectionPoolHandle {
     type Connection = RentedConnection;
-    type Future = Box<Future<Item = Self::Connection, Error = Error> + Send + 'static>;
+    type Future = Box<dyn Future<Item = Self::Connection, Error = Error> + Send + 'static>;
 
     fn acquire_connection(&mut self, addr: SocketAddr) -> Self::Future {
         let (reply_tx, reply_rx) = oneshot::monitor();
@@ -328,7 +328,7 @@ enum Command {
 }
 
 struct Connect {
-    future: Box<Future<Item = TcpStream, Error = Error> + Send + 'static>,
+    future: Box<dyn Future<Item = TcpStream, Error = Error> + Send + 'static>,
     addr: SocketAddr,
     command_tx: mpsc::Sender<Command>,
 }

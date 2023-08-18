@@ -32,7 +32,7 @@ pub trait AcquireConnection {
 pub struct Oneshot;
 impl AcquireConnection for Oneshot {
     type Connection = Connection;
-    type Future = Box<Future<Item = Connection, Error = Error> + Send + 'static>;
+    type Future = Box<dyn Future<Item = Connection, Error = Error> + Send + 'static>;
 
     fn acquire_connection(&mut self, addr: SocketAddr) -> Self::Future {
         let future = TcpStream::connect(addr)
