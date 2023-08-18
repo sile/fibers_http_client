@@ -9,10 +9,6 @@ readme = "README.md"
 categories = ["web-programming::http-client"]
 license = "MIT"
 
-[badges]
-travis-ci = {repository = "sile/fibers_http_client"}
-codecov = {repository = "sile/fibers_http_client"}
-
 [dependencies]
 bytecodec = "0.4"
 fibers = "0.1"

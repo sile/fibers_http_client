@@ -3,8 +3,6 @@ fibers_http_client
 
 [![fibers_http_client](http://meritbadge.herokuapp.com/fibers_http_client)](https://crates.io/crates/fibers_http_client)
 [![Documentation](https://docs.rs/fibers_http_client/badge.svg)](https://docs.rs/fibers_http_client)
-[![Build Status](https://travis-ci.org/sile/fibers_http_client.svg?branch=master)](https://travis-ci.org/sile/fibers_http_client)
-[![Code Coverage](https://codecov.io/gh/sile/fibers_http_client/branch/master/graph/badge.svg)](https://codecov.io/gh/sile/fibers_http_client/branch/master)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A tiny asynchronous HTTP/1.1 client library for Rust.
